@@ -1,0 +1,23 @@
+[project]
+name = "nexus-backend"
+version = "0.1.0"
+description = "NEXUS Backend — API, data and integrations for the NEXUS support workspace"
+requires-python = ">=3.12,<3.13"
+# Direct dependencies, pinned exactly. The full pinned tree (including
+# sub-dependencies) is generated into requirements.txt — see docs/lessons/lesson-01.md.
+dependencies = [
+  "fastapi==0.163.1",
+  "uvicorn[standard]==0.54.0",
+  "sqlalchemy==2.1.8",
+  "psycopg[binary]==3.3.9",
+  "alembic==1.20.1",
+  "pydantic-settings==2.16.3",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

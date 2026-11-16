@@ -1,0 +1,160 @@
+# NEXUS services. Start everything with:  docker compose up -d
+# Every image is pinned to an exact version (never "latest").
+#
+#   nexus-db, nexus-backend           → NEXUS (our code + our database)
+#   chatwoot-*                        → Chatwoot, an external open-source service.
+#                                       Its database and Redis have NO host ports: NEXUS talks to
+#                                       Chatwoot only through its REST API and webhooks.
+
+name: nexus
+
+# Settings shared by every Chatwoot container (YAML anchor, reused below with <<: *chatwoot).
+x-chatwoot: &chatwoot
+  image: chatwoot/chatwoot:v4.19.1
+  environment:
+    RAILS_ENV: production
+    NODE_ENV: production
+    INSTALLATION_ENV: docker
+    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?Set CHATWOOT_SECRET_KEY_BASE in .env}
+    FRONTEND_URL: http://localhost:${CHATWOOT_HOST_PORT:-3000}
+    FORCE_SSL: 'false'
+    ENABLE_ACCOUNT_SIGNUP: 'false'
+    POSTGRES_HOST: chatwoot-db
+    POSTGRES_PORT: 5432
+    POSTGRES_DATABASE: chatwoot
+    POSTGRES_USERNAME: chatwoot
+    POSTGRES_PASSWORD: ${CHATWOOT_DB_PASSWORD:?Set CHATWOOT_DB_PASSWORD in .env}
+    REDIS_URL: redis://chatwoot-redis:6379
+    REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD:?Set CHATWOOT_REDIS_PASSWORD in .env}
+    ACTIVE_STORAGE_SERVICE: local
+    RAILS_LOG_TO_STDOUT: 'true'
+    LOG_LEVEL: info
+    # Chatwoot blocks webhooks to private addresses by default (SSRF protection).
+    # nexus-backend is a private Docker address, so local development must allow it.
+    SAFE_FETCH_ALLOW_PRIVATE_NETWORK: 'true'
+  volumes:
+    - chatwoot_storage:/app/storage
+  entrypoint: docker/entrypoints/rails.sh
+
+services:
+  nexus-db:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${NEXUS_DB_NAME:-nexus}
+      POSTGRES_USER: ${NEXUS_DB_USER:-nexus}
+      POSTGRES_PASSWORD: ${NEXUS_DB_PASSWORD:?Set NEXUS_DB_PASSWORD in .env}
+    ports:
+      # Only reachable from this computer (127.0.0.1), so you can inspect it with psql.
+      - '127.0.0.1:${NEXUS_DB_HOST_PORT:-5433}:5432'
+    volumes:
+      - nexus_db_data:/var/lib/postgresql/data
+      - ./infra/nexus-db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nexus-backend:
+    build: ./backend
+    image: nexus-backend:0.1.0
+    restart: unless-stopped
+    depends_on:
+      nexus-db:
+        condition: service_healthy
+    environment:
+      # Only the variables the backend needs are passed in — nothing else from .env.
+      NEXUS_DB_HOST: nexus-db
+      NEXUS_DB_PORT: 5432
+      NEXUS_DB_NAME: ${NEXUS_DB_NAME:-nexus}
+      NEXUS_DB_USER: ${NEXUS_DB_USER:-nexus}
+      NEXUS_DB_PASSWORD: ${NEXUS_DB_PASSWORD:?Set NEXUS_DB_PASSWORD in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NEXUS_RELOAD: ${NEXUS_RELOAD:-true}
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
+      CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
+    ports:
+      - '127.0.0.1:${NEXUS_BACKEND_HOST_PORT:-8000}:8000'
+    volumes:
+      # Development: your code is mounted into the container, so edits reload instantly.
+      - ./backend:/app
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  # ── Chatwoot (external service) ─────────────────────────────────────────────
+  chatwoot-db:
+    image: pgvector/pgvector:0.8.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: chatwoot
+      POSTGRES_PASSWORD: ${CHATWOOT_DB_PASSWORD:?Set CHATWOOT_DB_PASSWORD in .env}
+    volumes:
+      - chatwoot_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U chatwoot -d chatwoot']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  chatwoot-redis:
+    image: redis:7.4.6-alpine
+    restart: unless-stopped
+    command: ['sh', '-c', 'exec redis-server --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD:?Set CHATWOOT_REDIS_PASSWORD in .env}
+    volumes:
+      - chatwoot_redis_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-off job: creates/migrates Chatwoot's database, then exits. Safe to run every start.
+  chatwoot-init:
+    <<: *chatwoot
+    command: ['bundle', 'exec', 'rails', 'db:chatwoot_prepare']
+    restart: 'no'
+    depends_on:
+      chatwoot-db: { condition: service_healthy }
+      chatwoot-redis: { condition: service_healthy }
+
+  chatwoot-rails:
+    <<: *chatwoot
+    command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
+    restart: unless-stopped
+    depends_on:
+      chatwoot-init: { condition: service_completed_successfully }
+    ports:
+      - '127.0.0.1:${CHATWOOT_HOST_PORT:-3000}:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3000/api || exit 1']
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+
+  # Background worker — this is the process that actually SENDS webhooks to NEXUS.
+  chatwoot-sidekiq:
+    <<: *chatwoot
+    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+    restart: unless-stopped
+    depends_on:
+      chatwoot-init: { condition: service_completed_successfully }
+
+volumes:
+  nexus_db_data:
+  chatwoot_db_data:
+  chatwoot_redis_data:
+  chatwoot_storage:
+
+# All services share Compose's default network (<project>_default, e.g. nexus_default) and reach
+# each other by service name: nexus-backend, chatwoot-rails, nexus-db, …
