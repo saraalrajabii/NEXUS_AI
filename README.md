@@ -37,3 +37,8 @@ This repository is also a teaching course — each lesson lives in `docs/lessons
    Then open http://localhost:5173.
 
 Run the backend tests with `docker compose exec nexus-backend pytest`.
+
+## Deploying
+
+See [docs/deploy/railway.md](docs/deploy/railway.md) for Railway: separate backend and frontend services, a
+Railway Postgres database, and a password gate in front of the UI.

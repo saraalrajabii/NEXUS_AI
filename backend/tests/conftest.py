@@ -47,7 +47,7 @@ def alembic_config(url: str) -> Config:
 
 @pytest.fixture(scope="session")
 def engine() -> Iterator[Engine]:
-    url = make_test_settings().database_url().render_as_string(hide_password=False)
+    url = make_test_settings().database_url(TEST_DB_NAME).render_as_string(hide_password=False)
     cfg = alembic_config(url)
     command.downgrade(cfg, "base")  # start from an empty schema every run
     command.upgrade(cfg, "head")

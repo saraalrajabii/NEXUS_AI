@@ -29,10 +29,10 @@ app.include_router(webhooks.router)
 # Report configuration at startup — which settings are present, never their values.
 log.info(
     "NEXUS backend starting (database=%s@%s:%s/%s, chatwoot_api=%s, webhook_secret=%s)",
-    settings.nexus_db_user,
-    settings.nexus_db_host,
-    settings.nexus_db_port,
-    settings.nexus_db_name,
+    settings.database_url().username,
+    settings.database_url().host,
+    settings.database_url().port,
+    settings.database_url().database,
     "configured" if settings.chatwoot_api_configured else "NOT configured",
     "set" if settings.chatwoot_webhook_secret.get_secret_value() else "NOT set",
 )

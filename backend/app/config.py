@@ -7,13 +7,16 @@ from functools import lru_cache
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    # NEXUS database (NOT Chatwoot's database)
+    # NEXUS database (NOT Chatwoot's database).
+    # Either one URL (hosting platforms provide this, e.g. Railway's ${{Postgres.DATABASE_URL}})…
+    nexus_database_url: SecretStr = SecretStr("")
+    # …or the individual parts (used by docker-compose locally).
     nexus_db_host: str = "localhost"
     nexus_db_port: int = 5432
     nexus_db_name: str = "nexus"
@@ -30,6 +33,9 @@ class Settings(BaseSettings):
     chatwoot_timeout_seconds: float = 5.0
 
     def database_url(self, database: str | None = None) -> URL:
+        if self.nexus_database_url.get_secret_value():
+            url = make_url(self.nexus_database_url.get_secret_value()).set(drivername="postgresql+psycopg")
+            return url.set(database=database) if database else url
         return URL.create(
             "postgresql+psycopg",
             username=self.nexus_db_user,

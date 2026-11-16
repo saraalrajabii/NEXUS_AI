@@ -1,0 +1,49 @@
+# Production web server for the NEXUS frontend (used by frontend/Dockerfile, e.g. on Railway).
+#
+# Environment variables:
+#   PORT                    port to listen on (Railway sets it; default 8080)
+#   BACKEND_URL             where the NEXUS backend lives, e.g. http://backend.railway.internal:8000
+#   NEXUS_UI_USER           login name for the password gate (default: nexus)
+#   NEXUS_UI_PASSWORD_HASH  bcrypt hash of the password — create with:
+#                           docker run --rm caddy:2.11.8-alpine caddy hash-password --plaintext 'your-password'
+#
+# If NEXUS_UI_PASSWORD_HASH is missing, Caddy refuses to start (fails closed — never public by accident).
+
+{
+	admin off
+	auto_https off
+}
+
+:{$PORT:8080} {
+	encode zstd gzip
+
+	# Paths that must work WITHOUT the password:
+	#   /healthz      → Railway's health check
+	#   /webhooks/*   → Chatwoot; protected instead by the HMAC signature check in the backend
+	@protected not path /healthz /webhooks/*
+	basic_auth @protected {
+		{$NEXUS_UI_USER:nexus} {$NEXUS_UI_PASSWORD_HASH}
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Same rule as in development: the browser only talks to this server; API calls are forwarded.
+	handle /api/* {
+		reverse_proxy {$BACKEND_URL}
+	}
+	handle /health/* {
+		reverse_proxy {$BACKEND_URL}
+	}
+	handle /webhooks/* {
+		reverse_proxy {$BACKEND_URL}
+	}
+
+	# Everything else is the React app. Unknown paths return index.html so links like /inbox/123 work.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
