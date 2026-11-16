@@ -38,14 +38,18 @@ In the Railway project: **+ Create → Database → PostgreSQL**. Leave the name
 
 ### 2. Backend service
 
-Use the service that is connected to the GitHub repo (rename it to `backend`: **Settings → Service name**).
+Use the service that is connected to the GitHub repo. In this course it is called `NEXUS_AI`; if you rename
+it (for example to `backend`), change the name inside `BACKEND_URL` in step 3 to match.
 
 **Settings → Source**
 - **Root Directory:** `/backend`
 
-**Settings → Config-as-code**
-- **Railway config file:** `/backend/railway.json`. This makes Railway build with `backend/Dockerfile`
-  and health-check `/health/live`.
+**Settings → Deploy → Healthcheck Path:** `/health/live`
+
+Railway builds with `backend/Dockerfile` automatically, because it finds a Dockerfile in the root directory.
+
+> Railway's older "Config as Code" (`railway.json`) can't be turned on for new services any more, so
+> everything is set in the dashboard instead.
 
 **Variables:**
 
@@ -53,7 +57,7 @@ Use the service that is connected to the GitHub repo (rename it to `backend`: **
 |---|---|---|
 | `NEXUS_DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | A reference: Railway fills in the database address |
 | `PORT` | `8000` | A fixed port, so the frontend knows where to find the backend |
-| `HOST` | `::` | Railway's private network uses IPv6 |
+| `HOST` | `::` | The default. Listens on IPv6 (Railway's private network) **and** IPv4 (Railway's health checks) |
 | `NEXUS_RELOAD` | `false` | No auto-reload in production |
 | `LOG_LEVEL` | `info` | |
 
@@ -64,13 +68,13 @@ Don't generate a public domain for the backend.
 **+ Create → GitHub Repo → `NEXUS_AI`** (the same repo again), then rename it to `frontend`.
 
 **Settings → Source → Root Directory:** `/frontend`
-**Settings → Config-as-code → Railway config file:** `/frontend/railway.json`
+**Settings → Deploy → Healthcheck Path:** `/healthz`
 
 **Variables:**
 
 | Variable | Value |
 |---|---|
-| `BACKEND_URL` | `http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:8000` |
+| `BACKEND_URL` | `http://${{NEXUS_AI.RAILWAY_PRIVATE_DOMAIN}}:8000` (use your backend service's name) |
 | `NEXUS_UI_USER` | a login name, e.g. `nexus` |
 | `NEXUS_UI_PASSWORD_HASH` | the bcrypt hash of your password (see below) |
 
@@ -89,7 +93,7 @@ docker run --rm caddy:2.11.8-alpine caddy hash-password --plaintext 'your-passwo
 3. After logging in, the Dashboard shows **NEXUS backend: Connected** and **NEXUS database: Connected**.
    Chatwoot shows **Not configured** until Part 2.
 4. In the backend's **Deploy Logs** you should see `Running upgrade -> 0001` once, then
-   `Starting API on :::8000`.
+   `[serve] Listening on port 8000 (IPv4+IPv6)`.
 
 ## Part 2 — Chatwoot (optional)
 
@@ -108,7 +112,8 @@ Either way, add `CHATWOOT_WEBHOOK_SECRET` to the backend once the webhook exists
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Railpack could not determine how to build the app` | Root Directory not set | Set it to `/backend` or `/frontend` |
-| Build uses Railpack instead of the Dockerfile | Config file path not set | Settings → Config-as-code → `/backend/railway.json` (or `/frontend/…`) |
+| Build uses Railpack instead of the Dockerfile | Root Directory doesn't point at the folder with the Dockerfile | Set Root Directory to `/backend` or `/frontend` |
+| Backend stuck on "Deploying", then fails its health check | The server listened on IPv6 only, and Railway health-checks over IPv4 | Fixed in `app/serve.py` (one socket for both). Make sure the healthcheck path is `/health/live` |
 | Frontend crashes: `username and password cannot be empty` | `NEXUS_UI_PASSWORD_HASH` missing | Add the hash (step 3). This is intentional: it never starts without a password |
-| Logged in, but every panel says *Backend not reachable* | Wrong `BACKEND_URL`, or the backend isn't listening on IPv6 | `BACKEND_URL=http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:8000`, with `HOST=::` and `PORT=8000` on the backend |
+| Logged in, but every panel says *Backend not reachable* | Wrong `BACKEND_URL` | `BACKEND_URL=http://${{<backend service name>.RAILWAY_PRIVATE_DOMAIN}}:8000`, with `PORT=8000` on the backend |
 | Backend health check fails | Database not connected | Check `NEXUS_DATABASE_URL=${{Postgres.DATABASE_URL}}` and that the Postgres service is running |
